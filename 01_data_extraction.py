@@ -1,6 +1,7 @@
 import yfinance as yf
 import pandas_datareader.data as web
 import datetime
+from arch import arch_model
 
 # Define the timeframe for a comprehensive ten-year backtest (e.g., 2016-2026)[cite: 1]
 start_date = '2016-01-01'
@@ -155,3 +156,97 @@ if arch_test[1] < 0.05:
     print("Conclusion: The null hypothesis of homoscedasticity is rejected. Residuals exhibit volatility clustering. Proceed to Phase IV (Variance Forecasting).")
 else:
     print("Conclusion: No significant volatility clustering detected.")
+
+    from arch import arch_model
+import pandas as pd
+
+# ==========================================
+# Phase IV, Step 1: Univariate Volatility Modeling (EGARCH)[cite: 1]
+# ==========================================
+print("\n--- Starting Phase IV: EGARCH Univariate Modeling ---")
+
+# Dictionaries to store conditional volatilities and standardized residuals
+cond_vol = {}
+std_resid = {}
+
+# The conditional variance of each asset must be modeled individually[cite: 1]
+for asset in log_returns.columns:
+    print(f"Fitting EGARCH(1,1) for {asset}...")
+    
+    # Scale returns by 100 to help the maximum likelihood optimizer converge (standard econometric practice)
+    asset_returns = log_returns[asset].dropna() * 100 
+    
+    # Specify the EGARCH(1,1) model to capture the asymmetric leverage effect[cite: 1]
+    # The Python arch package seamlessly handles this univariate estimation[cite: 1]
+    # p=1 (GARCH term), o=1 (Asymmetric/Leverage term for EGARCH), q=1 (ARCH term)
+    am = arch_model(asset_returns, vol='EGARCH', p=1, o=1, q=1, dist='Normal')
+    
+    # Fit the model (disp='off' suppresses the iteration output)
+    res = am.fit(disp='off')
+    
+    # Extract conditional standard deviations (rescaled back by dividing by 100)
+    cond_vol[asset] = res.conditional_volatility / 100
+    
+    # Extract standardized residuals (raw residuals divided by conditional volatility)[cite: 1]
+    std_resid[asset] = res.resid / res.conditional_volatility
+
+# Convert the dictionaries back into aligned pandas DataFrames
+cond_vol_df = pd.DataFrame(cond_vol)
+std_resid_df = pd.DataFrame(std_resid)
+
+print("\nEGARCH Univariate Modeling Complete.")
+print("Standardized Residuals (Z_i,t) - First 5 rows:")
+print(std_resid_df.head())
+
+# ==========================================
+# Phase IV, Step 2: Dynamic Conditional Correlation (DCC) Modeling[cite: 1]
+# ==========================================
+print("\n--- Starting Phase IV: DCC Correlation Modeling ---")
+
+# Extract numpy matrices from the standardized residuals dataframe
+Z = std_resid_df.values
+T, N = Z.shape
+
+# Unconditional covariance matrix of standardized residuals (\bar{Q})
+Q_bar = std_resid_df.cov().values
+
+# Standard DCC parameters (a and b satisfying a + b < 1 for stationarity)[cite: 1]
+a = 0.05
+b = 0.93
+
+# Initialize Q matrix and iterate through time to capture correlation breakdowns
+Q_t = Q_bar.copy()
+R_t_list = []
+
+for t in range(T):
+    z_t = Z[t, :].reshape(-1, 1)
+    if t > 0:
+        z_prev = Z[t-1, :].reshape(-1, 1)
+        # Update proxy correlation matrix Q_t[cite: 1]
+        Q_t = (1 - a - b) * Q_bar + a * (z_prev @ z_prev.T) + b * Q_t
+    
+    # Scale Q_t to obtain the correlation matrix R_t[cite: 1]
+    diag_inv_sqrt = np.diag(1.0 / np.sqrt(np.diagonal(Q_t)))
+    R_t = diag_inv_sqrt @ Q_t @ diag_inv_sqrt
+    R_t_list.append(R_t)
+
+print("Dynamic Conditional Correlation matrices successfully constructed.")
+
+# ==========================================
+# Final Covariance Forecast Generation (H_{t+1|t})
+# ==========================================
+# Extract latest conditional standard deviations (diagonal of D_t)
+latest_vol = cond_vol_df.iloc[-1].values
+D_t = np.diag(latest_vol)
+
+# Latest dynamic correlation matrix forecast (R_{t+1|t})
+R_forecast = R_t_list[-1]
+
+# Construct the full multivariate conditional covariance matrix forecast[cite: 1]
+H_forecast = D_t @ R_forecast @ D_t
+
+# Convert forecast into a readable Pandas DataFrame
+covariance_forecast_df = pd.DataFrame(H_forecast, index=log_returns.columns, columns=log_returns.columns)
+
+print("\nOne-Step-Ahead Covariance Matrix Forecast (H_{t+1|t}) Generated:")
+print(covariance_forecast_df)
