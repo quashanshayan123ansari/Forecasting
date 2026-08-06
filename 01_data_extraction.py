@@ -8,6 +8,8 @@ from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, Tabl
 from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.pdfgen import canvas
 import os
+import matplotlib.pyplot as plt
+from statsmodels.graphics.tsaplots import plot_acf, plot_pacf
 
 # Define the timeframe for a comprehensive ten-year backtest (e.g., 2016-2026)[cite: 1]
 start_date = '2016-01-01'
@@ -405,8 +407,15 @@ from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.pdfgen import canvas
 import os
 
+from reportlab.lib import colors
+from reportlab.lib.pagesizes import letter
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image
+from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.pdfgen import canvas
+import os
+
 # ==========================================
-# Phase VII: Automated PDF Generation via ReportLab[cite: 1]
+# Phase VII: Automated PDF Generation via ReportLab (Updated with Charts)[cite: 1]
 # ==========================================
 print("\n--- Starting Phase VII: PDF Report Generation ---")
 
@@ -453,17 +462,17 @@ doc = SimpleDocTemplate(pdf_filename, pagesize=letter, rightMargin=50, leftMargi
 styles = getSampleStyleSheet()
 title_style = styles['Title']
 normal_style = styles['Normal']
+heading_style = styles['Heading2']
 
 elements = [] # List to hold all Platypus Flowables[cite: 1]
 
-# Add Title and Intro
+# --- Cover Page & Introduction ---
 elements.append(Paragraph("Dynamic Maximum Diversification Portfolio Analytics", title_style))
 elements.append(Spacer(1, 20))
 elements.append(Paragraph("This automated report details the performance of the out-of-sample portfolio simulated utilizing time-varying forecasts from an ARIMAX-DCC-GARCH engine compared to an Equal-Weight baseline.", normal_style))
 elements.append(Spacer(1, 20))
 
-# 3. Format Data for the Table Flowable[cite: 1]
-# Presenting the comparative backtest results achieved by passing a nested Python list[cite: 1]
+# --- Risk Metrics Table ---
 table_data = [
     ["Metric", "Maximum Diversification (MD)", "Equal-Weight Baseline (EW)"],
     ["Realized Volatility", f"{md_vol:.2%}", f"{ew_vol:.2%}"],
@@ -484,12 +493,11 @@ t.setStyle(TableStyle([
     ('BACKGROUND', (0, 1), (-1, -1), colors.HexColor('#f2f2f2')),
     ('GRID', (0, 0), (-1, -1), 0.5, colors.grey) # Grid lines painted onto coordinates[cite: 1]
 ]))
-
 elements.append(t)
 elements.append(Spacer(1, 40))
 
-# Add the final allocation weights summary
-elements.append(Paragraph("Optimal Target Weights for Next Rebalancing Period:", styles['Heading2']))
+# --- Target Allocations Table ---
+elements.append(Paragraph("Optimal Target Weights for Next Rebalancing Period:", heading_style))
 elements.append(Spacer(1, 10))
 
 weights_data = [["Asset", "Target Allocation"]]
@@ -503,11 +511,129 @@ w_table.setStyle(TableStyle([
     ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
     ('GRID', (0, 0), (-1, -1), 0.5, colors.grey)
 ]))
-
 elements.append(w_table)
+elements.append(Spacer(1, 40))
+
+# --- Visualizations Section ---
+# Inject images into the PDF stream via the ReportLab Image flowable[cite: 1]
+elements.append(Paragraph("Econometric Diagnostics & Performance Visualizations", heading_style))
+elements.append(Spacer(1, 15))
+
+# Chart 1: Stationarity
+if os.path.exists('Chart_1_Stationarity_Diagnostics.png'):
+    # Scaled to fit letter page width (approx 500 points wide)
+    img1 = Image('Chart_1_Stationarity_Diagnostics.png', width=500, height=350)
+    elements.append(img1)
+    elements.append(Spacer(1, 25))
+
+# Chart 2: ACF/PACF
+if os.path.exists('Chart_2_ACF_PACF.png'):
+    img2 = Image('Chart_2_ACF_PACF.png', width=500, height=350)
+    elements.append(img2)
+    elements.append(Spacer(1, 25))
+
+# Chart 3: Drawdowns
+if os.path.exists('Chart_3_Cumulative_Drawdowns.png'):
+    img3 = Image('Chart_3_Cumulative_Drawdowns.png', width=500, height=250)
+    elements.append(img3)
 
 # Build the PDF using the custom NumberedCanvas
 doc.build(elements, canvasmaker=NumberedCanvas)
 
-print(f"PDF Successfully Generated! Check your folder for '{pdf_filename}'.")
+print(f"PDF Successfully Generated with Charts! Check your folder for '{pdf_filename}'.")
 print("\n--- Pipeline Execution Complete ---")
+
+# ==========================================
+# Phase VIII: Data Visualization & Plotting
+# ==========================================
+print("\n--- Starting Phase VIII: Generating Visualizations ---")
+
+# We will use Indian Equities (^NSEI) as our sample asset for the diagnostics
+sample_asset_raw = portfolio_df['^NSEI'].dropna()
+sample_asset_returns = log_returns['^NSEI'].dropna()
+
+# Set universal plot styling
+plt.style.use('seaborn-v0_8-whitegrid')
+
+# ---------------------------------------------------------
+# Chart 1: Stationarity, Rolling Mean, and Variance (Clean Titles)
+# ---------------------------------------------------------
+fig1, axes1 = plt.subplots(2, 2, figsize=(14, 10))
+fig1.suptitle('Prices and Log Returns Diagnostics - NIFTY 50 (^NSEI)', fontsize=16)
+
+# Top Left: Raw Prices with Rolling Mean
+rolling_mean = sample_asset_raw.rolling(window=60).mean()
+rolling_std = sample_asset_raw.rolling(window=60).std()
+axes1[0, 0].plot(sample_asset_raw, label='True Price', color='blue', alpha=0.5, linewidth=1)
+axes1[0, 0].plot(rolling_mean, label='60-day Rolling Mean', color='red', linestyle='--', linewidth=1)
+axes1[0, 0].set_title('Raw Asset Price and 60-Day Rolling Mean')
+axes1[0, 0].legend(fontsize=8)
+axes1[0, 0].tick_params(axis='x', rotation=45)
+
+# Top Right: Rolling Variance (Std Dev)
+axes1[0, 1].plot(rolling_std, color='darkorange', linewidth=1)
+axes1[0, 1].set_title('60-Day Rolling Standard Deviation')
+axes1[0, 1].set_ylabel('Std Dev')
+axes1[0, 1].tick_params(axis='x', rotation=45)
+
+# Bottom Left: First Difference (Log Returns)
+axes1[1, 0].plot(sample_asset_returns, color='steelblue', linewidth=0.8)
+axes1[1, 0].axhline(0, color='black', linewidth=0.5)
+axes1[1, 0].set_title('Asset First Difference')
+axes1[1, 0].tick_params(axis='x', rotation=45)
+
+# Bottom Right: Volatility Clustering (Log Returns)
+axes1[1, 1].plot(sample_asset_returns, color='steelblue', linewidth=0.8)
+axes1[1, 1].axhline(0, color='black', linewidth=0.5)
+axes1[1, 1].set_title('Logarithmic Returns and Volatility Clustering')
+axes1[1, 1].tick_params(axis='x', rotation=45)
+
+plt.tight_layout()
+plt.savefig('Chart_1_Stationarity_Diagnostics.png')
+plt.show()
+
+# ---------------------------------------------------------
+# Chart 2: ACF and PACF Plots (Ref: Screenshot 2)
+# ---------------------------------------------------------
+fig2, axes2 = plt.subplots(2, 2, figsize=(14, 10))
+fig2.suptitle('ACF / PACF Analysis - ^NSEI', fontsize=16)
+
+# Top Row: ACF and PACF on Raw Prices
+plot_acf(sample_asset_raw, ax=axes2[0, 0], lags=40, title='^NSEI: ACF (raw close)')
+plot_pacf(sample_asset_raw, ax=axes2[0, 1], lags=40, title='^NSEI: PACF (raw close)')
+
+# Bottom Row: ACF and PACF on Differenced Data (Log Returns)
+plot_acf(sample_asset_returns, ax=axes2[1, 0], lags=40, title='^NSEI: ACF (d=1 differenced)')
+plot_pacf(sample_asset_returns, ax=axes2[1, 1], lags=40, title='^NSEI: PACF (d=1 differenced)')
+
+plt.tight_layout()
+plt.savefig('Chart_2_ACF_PACF.png')
+plt.show()
+
+# ---------------------------------------------------------
+# Chart 3: Cumulative Strategy Returns & Drawdowns (Ref: Screenshot 3)
+# ---------------------------------------------------------
+fig3, ax3 = plt.subplots(figsize=(12, 6))
+
+# Calculate cumulative returns of your optimized Maximum Diversification portfolio
+cumulative_returns = (1 + md_portfolio_returns).cumprod()
+
+# Plot the equity curve
+ax3.plot(cumulative_returns.index, cumulative_returns, color='black', linewidth=1.2, label='Cumulative Returns')
+ax3.axhline(1.0, color='black', linestyle=':', linewidth=1.5, label='Breakeven 1.00')
+
+# Fill Green for profit (above 1.0), Red for drawdown (below 1.0)
+ax3.fill_between(cumulative_returns.index, cumulative_returns, 1.0, 
+                 where=(cumulative_returns >= 1.0), facecolor='lightgreen', interpolate=True, alpha=0.5)
+ax3.fill_between(cumulative_returns.index, cumulative_returns, 1.0, 
+                 where=(cumulative_returns < 1.0), facecolor='lightcoral', interpolate=True, alpha=0.5)
+
+ax3.set_title('Maximum Diversification Portfolio: Cumulative Strategy Returns', fontsize=14)
+ax3.set_ylabel('Growth of $1')
+ax3.legend(loc='upper left')
+
+plt.tight_layout()
+plt.savefig('Chart_3_Cumulative_Drawdowns.png')
+plt.show()
+
+print("All charts successfully generated and saved to your directory!")
