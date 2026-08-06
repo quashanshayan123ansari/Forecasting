@@ -49,9 +49,11 @@ print("Data Fetched Successfully.")
 # ==========================================
 print("\n--- Starting Phase II: Preprocessing ---")
 
-# Strip timezones so Yahoo Finance and FRED calendars align perfectly
-yf_data.index = yf_data.index.tz_localize(None)
-fred_data.index = fred_data.index.tz_localize(None)
+# Safely strip timezones only if they exist to prevent tz-naive TypeErrors
+if getattr(yf_data.index, 'tz', None) is not None:
+    yf_data.index = yf_data.index.tz_localize(None)
+if getattr(fred_data.index, 'tz', None) is not None:
+    fred_data.index = fred_data.index.tz_localize(None)
 
 portfolio_df = pd.concat([yf_data['Close'], fred_data], axis=1)
 portfolio_df = portfolio_df.ffill().dropna()
@@ -106,7 +108,6 @@ print(f"ARCH-LM Test Statistic: {arch_test[0]:.4f}, p-value: {arch_test[1]:.4f}"
 # ==========================================
 print("\n--- Starting Phase IV: Volatility & DCC Modeling ---")
 
-# Define strictly tradable assets for portfolio allocation (excluding macro indices)
 tradable_assets = ['^NSEI', '^GSPC', 'GC=F', 'CL=F', 'DBC']
 
 cond_vol = {}
@@ -173,19 +174,21 @@ opt_results = sco.minimize(neg_diversification_ratio,
                            bounds=bounds, 
                            constraints=constraints)
 
+# Handle optimizer results with a safe fallback to prevent NameErrors
 if opt_results.success:
     optimal_weights = opt_results.x
     max_dr = -opt_results.fun
     print(f"\nMaximum Diversification Ratio Achieved: {max_dr:.4f}")
-    
-    optimal_portfolio_df = pd.DataFrame({
-        'Asset': tradable_assets, 
-        'Optimal_Weight': [round(w, 4) for w in optimal_weights]
-    })
-    print("\nTarget Portfolio Allocations:")
-    print(optimal_portfolio_df.sort_values(by='Optimal_Weight', ascending=False).to_string(index=False))
 else:
-    print("\nOptimizer failed:", opt_results.message)
+    print(f"\nOptimizer failed to converge: {opt_results.message}; falling back to Equal Weights.")
+    optimal_weights = initial_weights
+
+optimal_portfolio_df = pd.DataFrame({
+    'Asset': tradable_assets, 
+    'Optimal_Weight': [round(w, 4) for w in optimal_weights]
+})
+print("\nTarget Portfolio Allocations:")
+print(optimal_portfolio_df.sort_values(by='Optimal_Weight', ascending=False).to_string(index=False))
 
 # ==========================================
 # Phase VI: Performance Analytics
@@ -229,7 +232,7 @@ print(f"Sortino Ratio       (MD): {md_sortino:.4f} | (EW Baseline): {ew_sortino:
 print(f"Maximum Drawdown    (MD): {md_max_dd:.4f} | (EW Baseline): {ew_max_dd:.4f}")
 
 # ==========================================
-# Phase VIII: Generating Visualizations (Moved BEFORE PDF Generation)
+# Phase VIII: Generating Visualizations
 # ==========================================
 print("\n--- Starting Phase VIII: Generating Visualizations ---")
 plt.style.use('seaborn-v0_8-whitegrid')
@@ -278,15 +281,15 @@ plt.tight_layout()
 plt.savefig('Chart_2_ACF_PACF.png')
 plt.close()
 
-# Chart 3: Cumulative Drawdown Curve
+# Chart 3: Cumulative Drawdown Curve (with .values conversion to fix Matplotlib warnings)
 fig3, ax3 = plt.subplots(figsize=(12, 6))
 cumulative_returns = (1 + md_portfolio_returns).cumprod()
 ax3.plot(cumulative_returns.index, cumulative_returns, color='black', linewidth=1.2, label='Cumulative Returns')
 ax3.axhline(1.0, color='black', linestyle=':', linewidth=1.5, label='Breakeven 1.00')
 ax3.fill_between(cumulative_returns.index, cumulative_returns, 1.0, 
-                 where=(cumulative_returns >= 1.0), facecolor='lightgreen', interpolate=True, alpha=0.5)
+                 where=(cumulative_returns >= 1.0).values, facecolor='lightgreen', interpolate=True, alpha=0.5)
 ax3.fill_between(cumulative_returns.index, cumulative_returns, 1.0, 
-                 where=(cumulative_returns < 1.0), facecolor='lightcoral', interpolate=True, alpha=0.5)
+                 where=(cumulative_returns < 1.0).values, facecolor='lightcoral', interpolate=True, alpha=0.5)
 ax3.set_title('Maximum Diversification Portfolio: Cumulative Strategy Returns', fontsize=14)
 ax3.set_ylabel('Growth of $1')
 ax3.legend(loc='upper left')
