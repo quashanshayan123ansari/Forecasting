@@ -44,6 +44,7 @@ print("\nFetching data from FRED...")
 fred_data = web.DataReader(fred_tickers, 'fred', start_date, end_date)
 print("FRED Data Fetched Successfully.")
 print(fred_data.head())
+
 import pandas as pd
 import numpy as np
 
