@@ -250,3 +250,72 @@ covariance_forecast_df = pd.DataFrame(H_forecast, index=log_returns.columns, col
 
 print("\nOne-Step-Ahead Covariance Matrix Forecast (H_{t+1|t}) Generated:")
 print(covariance_forecast_df)
+
+import scipy.optimize as sco
+import numpy as np
+
+# ==========================================
+# Phase V: Maximum Diversification Optimization[cite: 1]
+# ==========================================
+print("\n--- Starting Phase V: MD Portfolio Optimization ---")
+
+# The one-step-ahead covariance matrix forecast (H_{t+1|t}) from Phase IV[cite: 1]
+H = covariance_forecast_df.values
+
+# Extract the vector of asset volatilities (\sigma_{t+1|t})[cite: 1]
+# These are the square roots of the diagonal elements of H_{t+1|t}[cite: 1]
+volatilities = np.sqrt(np.diagonal(H))
+N = len(volatilities)
+
+# Define the objective function to minimize (Negative Diversification Ratio)[cite: 1]
+def neg_diversification_ratio(w, V, Cov):
+    # Portfolio volatility: \sqrt(w^T H_{t+1|t} w)[cite: 1]
+    p_volatility = np.sqrt(np.dot(w.T, np.dot(Cov, w)))
+    
+    # Weighted average of individual asset volatilities: w^T \sigma_{t+1|t}[cite: 1]
+    w_volatility = np.dot(w.T, V)
+    
+    # Return negative DR because SciPy SLSQP natively minimizes functions[cite: 1]
+    return -(w_volatility / p_volatility)
+
+# 1. Full Investment Equality Constraint: sum of weights = 1.0[cite: 1]
+constraints = ({'type': 'eq', 'fun': lambda w: np.sum(w) - 1.0})
+
+# 2 & 3. Long-Only Bounds & Concentration Limits (0 <= w_i <= 0.40)[cite: 1]
+bounds = tuple((0.0, 0.40) for _ in range(N))
+
+# Initial guess for the optimizer (Equal-Weight portfolio)
+initial_weights = np.array(N * [1. / N])
+
+print("Running SLSQP Optimizer to maximize the Diversification Ratio...")
+
+# Execute optimization leveraging the SLSQP algorithm[cite: 1]
+opt_results = sco.minimize(neg_diversification_ratio, 
+                           initial_weights, 
+                           args=(volatilities, H), 
+                           method='SLSQP', 
+                           bounds=bounds, 
+                           constraints=constraints)
+
+if opt_results.success:
+    print("\nOptimization Successful!")
+    optimal_weights = opt_results.x
+    
+    # Calculate the final Diversification Ratio achieved (reversing the negative sign)
+    max_dr = -opt_results.fun
+    print(f"Maximum Diversification Ratio Achieved: {max_dr:.4f}")
+    
+    # Format and display the optimal allocation weights
+    optimal_portfolio_df = pd.DataFrame({
+        'Asset': covariance_forecast_df.columns, 
+        'Optimal_Weight': optimal_weights
+    })
+    
+    # Round to 4 decimal places for clean reporting
+    optimal_portfolio_df['Optimal_Weight'] = optimal_portfolio_df['Optimal_Weight'].apply(lambda x: round(x, 4))
+    
+    # Display the final portfolio sorted by weight allocation
+    print("\nTarget Portfolio Allocations:")
+    print(optimal_portfolio_df.sort_values(by='Optimal_Weight', ascending=False).to_string(index=False))
+else:
+    print("\nOptimizer failed to converge:", opt_results.message)
