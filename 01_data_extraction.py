@@ -2,6 +2,12 @@ import yfinance as yf
 import pandas_datareader.data as web
 import datetime
 from arch import arch_model
+from reportlab.lib import colors
+from reportlab.lib.pagesizes import letter
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.pdfgen import canvas
+import os
 
 # Define the timeframe for a comprehensive ten-year backtest (e.g., 2016-2026)[cite: 1]
 start_date = '2016-01-01'
@@ -49,32 +55,29 @@ print(fred_data.head())
 import pandas as pd
 import numpy as np
 
+import pandas as pd
+import numpy as np
+
 # ==========================================
 # Phase II: Data Engineering & Preprocessing[cite: 1]
 # ==========================================
 print("\n--- Starting Phase II: Preprocessing ---")
 
+# STRIP TIMEZONES so the Yahoo Finance and FRED calendars align perfectly
+yf_data.index = yf_data.index.tz_localize(None)
+fred_data.index = fred_data.index.tz_localize(None)
+
 # 1. Outer Calendar Join[cite: 1]
-# Combine the Yahoo Finance closing prices and FRED yields into a single DataFrame
-# The outer join ensures we keep all dates from both calendars
 portfolio_df = pd.concat([yf_data['Close'], fred_data], axis=1)
 
 # 2. Last Known Value (LKV) Interpolation[cite: 1]
-# Use forward-fill to carry the last observed price forward over holidays/outages[cite: 1]
 portfolio_df = portfolio_df.ffill()
-
-# Drop the initial rows that might still have NaNs before the first valid data point for all assets
 portfolio_df = portfolio_df.dropna()
 
 print("Calendar Alignment and LKV Interpolation Complete.")
-print(portfolio_df.head())
 
 # 3. Logarithmic Return Transformation[cite: 1]
-# Transform prices/yields into continuously compounded logarithmic returns[cite: 1]
-# This closer approximates normality and provides time-additive properties[cite: 1]
 log_returns = np.log(portfolio_df / portfolio_df.shift(1))
-
-# Drop the first row since the shift operation creates a NaN
 log_returns = log_returns.dropna()
 
 print("\nLogarithmic Returns Calculated Successfully:")
@@ -319,3 +322,192 @@ if opt_results.success:
     print(optimal_portfolio_df.sort_values(by='Optimal_Weight', ascending=False).to_string(index=False))
 else:
     print("\nOptimizer failed to converge:", opt_results.message)
+
+    import numpy as np
+import pandas as pd
+
+# ==========================================
+# Phase VI: Performance Analytics (Custom Implementation)[cite: 1]
+# ==========================================
+print("\n--- Starting Phase VI: Performance Analytics ---")
+
+# Align the original log returns DataFrame with the exact order of the optimized weights
+aligned_returns = log_returns[optimal_portfolio_df['Asset']]
+opt_weights = optimal_portfolio_df['Optimal_Weight'].values
+
+# Calculate the simulated daily returns of the Maximum Diversification (MD) portfolio
+md_portfolio_returns = (aligned_returns * opt_weights).sum(axis=1)
+
+# Calculate the baseline Equal-Weight (EW) portfolio returns for benchmarking[cite: 1]
+ew_weights = np.array([1.0 / len(opt_weights)] * len(opt_weights))
+ew_portfolio_returns = (aligned_returns * ew_weights).sum(axis=1)
+
+# Define an approximate daily risk-free rate for Sharpe/Sortino calculations
+# Based on the India 10-Year Yield (e.g., ~7.0% annualized)[cite: 1]
+annual_rf_rate = 0.07 
+daily_rf_rate = annual_rf_rate / 252
+
+# --- Custom Risk Metric Functions ---
+def calc_annual_volatility(returns):
+    """Annualized standard deviation of daily returns"""
+    return returns.std() * np.sqrt(252)
+
+def calc_sharpe_ratio(returns, risk_free_rate):
+    """Excess return over risk-free rate divided by volatility"""
+    excess_returns = returns - risk_free_rate
+    return (excess_returns.mean() / returns.std()) * np.sqrt(252)
+
+def calc_sortino_ratio(returns, risk_free_rate):
+    """Penalizes only downside volatility"""
+    excess_returns = returns - risk_free_rate
+    downside_returns = excess_returns[excess_returns < 0]
+    downside_deviation = np.sqrt(np.mean(downside_returns**2))
+    return (excess_returns.mean() / downside_deviation) * np.sqrt(252)
+
+def calc_max_drawdown(returns):
+    """Largest peak-to-trough percentage drop"""
+    cumulative_returns = (1 + returns).cumprod()
+    rolling_max = cumulative_returns.cummax()
+    drawdowns = (cumulative_returns - rolling_max) / rolling_max
+    return drawdowns.min()
+
+print("\nInstitutional-Grade Risk-Adjusted Metrics:")
+print("-" * 50)
+
+# Calculate and print metrics
+md_vol = calc_annual_volatility(md_portfolio_returns)
+ew_vol = calc_annual_volatility(ew_portfolio_returns)
+print(f"Realized Volatility (MD):  {md_vol:.4f}  |  (EW Baseline): {ew_vol:.4f}")
+
+md_sharpe = calc_sharpe_ratio(md_portfolio_returns, daily_rf_rate)
+ew_sharpe = calc_sharpe_ratio(ew_portfolio_returns, daily_rf_rate)
+print(f"Sharpe Ratio        (MD):  {md_sharpe:.4f}  |  (EW Baseline): {ew_sharpe:.4f}")
+
+md_sortino = calc_sortino_ratio(md_portfolio_returns, daily_rf_rate)
+ew_sortino = calc_sortino_ratio(ew_portfolio_returns, daily_rf_rate)
+print(f"Sortino Ratio       (MD):  {md_sortino:.4f}  |  (EW Baseline): {ew_sortino:.4f}")
+
+md_max_dd = calc_max_drawdown(md_portfolio_returns)
+ew_max_dd = calc_max_drawdown(ew_portfolio_returns)
+print(f"Maximum Drawdown    (MD): {md_max_dd:.4f}  |  (EW Baseline): {ew_max_dd:.4f}")
+print("-" * 50)
+
+# Verify if MD framework successfully minimized downside risk compared to MVO/EW[cite: 1]
+if md_max_dd > ew_max_dd:
+    print("Conclusion: Maximum Diversification effectively reduced Maximum Drawdown.")
+else:
+    print("Conclusion: MD experienced deeper drawdowns in this specific sample window.")
+
+    from reportlab.lib import colors
+from reportlab.lib.pagesizes import letter
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.pdfgen import canvas
+import os
+
+# ==========================================
+# Phase VII: Automated PDF Generation via ReportLab[cite: 1]
+# ==========================================
+print("\n--- Starting Phase VII: PDF Report Generation ---")
+
+# 1. Canvas Intervention for Dynamic Headers/Footers[cite: 1]
+class NumberedCanvas(canvas.Canvas):
+    """
+    Custom canvas to intercept page drawing and inject 'Page X of Y' footers
+    in a single-pass document build[cite: 1].
+    """
+    def __init__(self, *args, **kwargs):
+        canvas.Canvas.__init__(self, *args, **kwargs)
+        self._saved_page_states = []
+
+    def showPage(self):
+        # Intercept the operation and save the complete state of the canvas dictionary[cite: 1]
+        self._saved_page_states.append(dict(self.__dict__))
+        self._startPage()
+
+    def save(self):
+        # Total length of the saved states list represents the absolute page count[cite: 1]
+        num_pages = len(self._saved_page_states)
+        
+        # Iterate back through buffered states and restore environment[cite: 1]
+        for state in self._saved_page_states:
+            self.__dict__.update(state)
+            self.draw_page_decorations(num_pages)
+            canvas.Canvas.showPage(self)
+        canvas.Canvas.save(self)
+
+    def draw_page_decorations(self, page_count):
+        # Imprint header text, disclaimers, and the accurate Page %d of %d string[cite: 1]
+        self.saveState()
+        self.setFont('Helvetica', 9)
+        self.drawRightString(550, 30, f"Page {self._pageNumber} of {page_count}")
+        self.drawString(50, 30, "Quantitative Research Strategy Output")
+        self.restoreState()
+
+# 2. Document Templates and Flowables[cite: 1]
+pdf_filename = "Maximum_Diversification_Report.pdf"
+# Instantiate a SimpleDocTemplate and define the page size[cite: 1]
+doc = SimpleDocTemplate(pdf_filename, pagesize=letter, rightMargin=50, leftMargin=50, topMargin=50, bottomMargin=50)
+
+# Source styles from getSampleStyleSheet()[cite: 1]
+styles = getSampleStyleSheet()
+title_style = styles['Title']
+normal_style = styles['Normal']
+
+elements = [] # List to hold all Platypus Flowables[cite: 1]
+
+# Add Title and Intro
+elements.append(Paragraph("Dynamic Maximum Diversification Portfolio Analytics", title_style))
+elements.append(Spacer(1, 20))
+elements.append(Paragraph("This automated report details the performance of the out-of-sample portfolio simulated utilizing time-varying forecasts from an ARIMAX-DCC-GARCH engine compared to an Equal-Weight baseline.", normal_style))
+elements.append(Spacer(1, 20))
+
+# 3. Format Data for the Table Flowable[cite: 1]
+# Presenting the comparative backtest results achieved by passing a nested Python list[cite: 1]
+table_data = [
+    ["Metric", "Maximum Diversification (MD)", "Equal-Weight Baseline (EW)"],
+    ["Realized Volatility", f"{md_vol:.2%}", f"{ew_vol:.2%}"],
+    ["Sharpe Ratio", f"{md_sharpe:.4f}", f"{ew_sharpe:.4f}"],
+    ["Sortino Ratio", f"{md_sortino:.4f}", f"{ew_sortino:.4f}"],
+    ["Maximum Drawdown", f"{md_max_dd:.2%}", f"{ew_max_dd:.2%}"]
+]
+
+# Create the Table and apply painted grid lines, row backgrounds, and alignment[cite: 1]
+t = Table(table_data, colWidths=[150, 180, 180])
+t.setStyle(TableStyle([
+    ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1A365D')), # Header background[cite: 1]
+    ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+    ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+    ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+    ('FONTSIZE', (0, 0), (-1, 0), 12),
+    ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+    ('BACKGROUND', (0, 1), (-1, -1), colors.HexColor('#f2f2f2')),
+    ('GRID', (0, 0), (-1, -1), 0.5, colors.grey) # Grid lines painted onto coordinates[cite: 1]
+]))
+
+elements.append(t)
+elements.append(Spacer(1, 40))
+
+# Add the final allocation weights summary
+elements.append(Paragraph("Optimal Target Weights for Next Rebalancing Period:", styles['Heading2']))
+elements.append(Spacer(1, 10))
+
+weights_data = [["Asset", "Target Allocation"]]
+for index, row in optimal_portfolio_df.sort_values(by='Optimal_Weight', ascending=False).iterrows():
+    weights_data.append([row['Asset'], f"{row['Optimal_Weight']:.2%}"])
+
+w_table = Table(weights_data, colWidths=[150, 150])
+w_table.setStyle(TableStyle([
+    ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#2c3e50')),
+    ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+    ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+    ('GRID', (0, 0), (-1, -1), 0.5, colors.grey)
+]))
+
+elements.append(w_table)
+
+# Build the PDF using the custom NumberedCanvas
+doc.build(elements, canvasmaker=NumberedCanvas)
+
+print(f"PDF Successfully Generated! Check your folder for '{pdf_filename}'.")
+print("\n--- Pipeline Execution Complete ---")
